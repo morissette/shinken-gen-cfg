@@ -1,0 +1,154 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Term::ANSIColor;
+use Getopt::Long;
+
+#####################################################
+#                                                   #
+# Generate basic host configurations via cli for    #
+# use with shinken and possibly nagios              #
+#                                                   #
+# mattharris.org                                    #
+#                                                   #
+#####################################################
+
+# Params: filename
+# Returns: 0|1
+sub does_file_exist {
+    my $file = shift;
+    if ( -f $file ) {
+	return 1;
+    } else {
+	return 0;
+    }
+}
+
+# Params: directory
+# Returns 0|err
+sub does_dir_exist {
+    my $dir = shift;
+    if ( ! -d $dir ) {
+	throw_fatal('Is shinken installed?');
+    }
+    return 0;
+}
+
+# Params: undef
+# Returns: 0|warn
+sub check_version {
+    my $cmd = '/usr/bin/shinken --version';
+    my $output = `$cmd`;
+    if ( $output !~ /shinken\s(2.+)/ ) {
+	throw_warning('This tool may not be compatible with your version. Detected: ' . $1);
+    }
+    return 0;
+}
+
+# Params: message
+# Returns: exit
+sub throw_fatal {
+    my $message = shift;
+    print color('red');
+    print "[!] " . $message . "\n";
+    print color('reset');
+    exit;
+}
+
+# Params: message
+# Returns: warning
+sub throw_warning { 
+    my $message = shift;
+    print color('yellow');
+    print "[?] " . $message . "\n";
+    print color('reset');
+}
+
+# Params: undef
+# Returns: hashref
+sub parse_cli_opts {
+    my %options;
+    GetOptions(
+	\%options,
+	'hostname=s',
+	'ip=s',
+	'cgroups=s',
+	'checks=s',
+	'help|usage|u|h|?',
+    );
+    if ( $options{'help'} or $options{'usage'} or $options{'u'} or $options{'h'} or $options{'?'} ) {
+	usage();
+    }
+    if ( $options{'hostname'} eq '' or
+	 $options{'ip'} eq '' or
+	 $options{'checks'} eq '' or
+	 $options{'cgroups'} eq ''
+    ) {
+        usage();
+	throw_fatal('Required options are --hostname, --ip, --checks, --cgroups');
+    }
+    return \%options;
+}
+
+# Params: hashref
+# Returns: 0|err
+sub write_config_file {
+    my $options = shift;
+    if ( does_file_exist('/etc/shinken/hosts/' . $options->{'hostname'} . '.cfg') ) {
+        print "[*] Please enter an alternative filename to " . $options->{'hostname'} . ".cfg: ";
+	$options->{'filename'} = <>;
+    }
+    my $filename = '/etc/shinken/hosts/' . $options->{'hostname'} . '.cfg';
+    if ( $options->{'filename'} ) {
+	$filename = '/etc/shinken/hosts/' . $options->{'filename'};
+    }
+
+    my $configuration = <<"EOF";
+define host {
+    use            $options->{'checks'}
+    contact_groups $options->{'cgroups'}
+    host_name      $options->{'hostname'}
+    address        $options->{'ip'}
+}
+EOF
+
+    open my $fh, '>', $filename or throw_fatal("Cannot write config file to $filename");
+    print {$fh} $configuration;
+    close $fh;
+ 
+    return 0;
+}
+
+sub usage {
+    print <<'EOF';
+
+  USAGE: 
+    shinken-gen-cfg --hostname domain.tld --ip 1.2.3.4 --checks "linux-snmp, http", --cgroups admin
+
+  OPTIONS:
+    --hostname      The FQDN and/or alias of the device you are monitoring
+    --ip            The IP address of the monitored device
+    --checks        The packs you want to use for monitoring
+    --cgroups       Who should be notified in regards to this device
+
+  Matt Harris (admin@mattharris.org)
+
+EOF
+    exit;
+}
+
+sub main {
+    # Pre-flight
+    does_dir_exist('/etc/shinken');
+    check_version();
+
+    # Pass to parse engine
+    my $options = parse_cli_opts();
+
+    # Generate and write config
+    write_config_file($options);
+
+    print "[*] Please reload shinken to add the new host definition.\n";
+}
+
+main;
